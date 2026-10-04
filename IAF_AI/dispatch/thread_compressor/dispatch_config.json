@@ -1,0 +1,25 @@
+{
+  "_note": "thread_compressor dispatch -- conventional per-counterpart single-thread compression. No tools, a pure text transform: chain.py stages everything outside the most recent thread_keep_blocks blocks of one counterpart's conversation into workspace/current/compress_input.md (injected via context_files); this dispatch emits only the compressed markdown body, and chain takes text_response and writes it back to the top of pool/threads/{peer}.md, keeping the most recent blocks verbatim. The conversational structure is preserved (conventional compression, not de-personalised). A cheap model is fine -- it compresses faithfully rather than inventing. ★Keep it non-streaming: the output is a background file that nobody is watching in real time. ★Three things that must not be touched (same reasons as the speaker): (1) **No free_search block** -- dispatch.py decides its mode with `free_search and (free_search_path or write_allow)`, and leaving it in puts this dispatch into FREE SEARCH MODE with exit_tools={write_file}; a compressor is a pure text transform and should load no tools at all. (2) **No *_tools.py under tools/** -- STANDARD MODE glob-loads them. (3) **max_tokens must be written explicitly** -- omit it and you inherit the provider default of 4096, which truncates the compressed output; the symptom of that truncation is 'the summary just stops mid-sentence', with no error.",
+  "display_name": "voice agent · single-thread compressor (thread_compressor)",
+  "agent_id": "voice_agent_thread_compressor",
+  "agents": {
+    "thread_compressor": {
+      "display_name": "Single-thread compression (one counterpart's older conversation -> faithful summary)",
+      "role": "core",
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "_provider_routing_note": "A direct DeepSeek connection does not recognise OpenRouter's provider-routing field; 'deepseek' here is only a marker, and llm_client._is_deepseek(url) skips sending it (otherwise: 400).",
+      "provider_routing": "deepseek",
+      "temperature": 0.3,
+      "max_tokens": 8000,
+      "reasoning": {
+        "_note": "DeepSeek's thinking mode uses its native format (top-level thinking + reasoning_effort), not OpenRouter's reasoning object; llm_client already branches on the endpoint.",
+        "effort": "medium"
+      },
+      "context_files": [
+        "../../../prompt_base/thread_compressor/compress_thread_skill.md",
+        "../../../workspace/current/compress_input.md"
+      ]
+    }
+  }
+}

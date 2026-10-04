@@ -1,0 +1,29 @@
+{
+  "_note": "speaker dispatch -- single responsibility: take the context, stream text out of the LLM, stream it into TTS. ★Four pieces of configuration that must not be touched, each with a reason: (1) **No free_search block** -- dispatch.py decides its mode with `free_search and (free_search_path or write_allow)`, and the upstream template ships a non-empty write_allow, so leaving the block in puts this dispatch into FREE SEARCH MODE with exit_tools={write_file}; streaming and exit_on_tools are mutually exclusive. (2) **No *_tools.py under tools/** -- STANDARD MODE glob-loads them, and the speaker uses no tools (status_log.py does not match that glob; it is record-keeping, not a tool, and must stay). (3) **provider_routing must be pinned** -- a provider cancellation (barge-in) only takes effect for providers on the list; drift off the list and an interrupted generation is still billed in full. (4) **max_tokens must be written explicitly** -- omit it and you inherit the provider default of 4096; a spoken reply should be short anyway, and this ceiling doubles as the anti-monologue guard. ★context_files has exactly two entries, deliberately: persona (identity) + envelope (memory). The envelope is rewritten every turn by assemble_pool.assemble_voice() and holds the integrated semantic layer plus that peer's most recent verbatim tail; both halves are bounded. ★Never point this at the pool/threads/ directory instead -- the engine's directory injection reads whole files, and a thread file is bounded at 50k tokens, which would destroy the time-to-first-word. ★Mirror rule: this file and IAF_AI/dispatch/speaker/dispatch_config.json must be changed together.",
+  "display_name": "Speaker Dispatch",
+  "agent_id": "speaker",
+  "can_hold_mic": false,
+  "agents": {
+    "core": {
+      "display_name": "Speaker Core",
+      "provider": "openrouter",
+      "model": "google/gemini-3.8-flash",
+      "temperature": 0.5,
+      "top_p": 0.95,
+      "max_tokens": 1200,
+      "role": "core",
+      "provider_routing": [
+        "google-ai-studio"
+      ],
+      "reasoning": {
+        "_note": "In a voice setting, reasoning is pure time-to-first-word. effort:'none' is what actually means 'do not reason'; exclude:true still reasons and merely hides it from you (you pay for both the tokens and the latency). ★On the first real run, reconcile: usage.completion_tokens_details.reasoning_tokens must be 0.",
+        "effort": "low"
+      },
+      "context_files": [
+        "../../../prompt_base/speaker/rules/persona.md",
+        "../../../workspace/current/envelope.md"
+      ]
+    }
+  },
+  "max_context": 200000
+}

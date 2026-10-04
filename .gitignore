@@ -1,0 +1,42 @@
+# ── Secrets ────────────────────────────────────────────────────────────────
+# config_base/config.json is the authoritative one; sync_config.py copies it
+# down to IAF_AI/config.json. Both hold real provider keys once you fill them
+# in, so neither is tracked. Copy the example and edit that:
+#     cp config_base/config.example.json config_base/config.json
+config_base/config.json
+IAF_AI/config.json
+
+# ── Runtime state ──────────────────────────────────────────────────────────
+# The conversation record, the per-turn session directories, and whatever the
+# engine writes while running. Directories are kept via .gitkeep.
+workspace/*
+!workspace/.gitkeep
+pool/threads/*
+!pool/threads/.gitkeep
+pool/semantic.md
+IAF_AI/dispatch/*/sessions/*
+!IAF_AI/dispatch/*/sessions/.gitkeep
+IAF_AI/dispatch/speaker/memory/*
+!IAF_AI/dispatch/speaker/memory/.gitkeep
+IAF_AI/dispatch/speaker/staging/*
+!IAF_AI/dispatch/speaker/staging/.gitkeep
+
+# ── Recordings ─────────────────────────────────────────────────────────────
+# Session dumps and any corpus you record. Never commit recordings of a real
+# person's speech. README.md explains how to record and label your own.
+IAF_AI/dispatch/listener/fixtures/*
+!IAF_AI/dispatch/listener/fixtures/.gitkeep
+!IAF_AI/dispatch/listener/fixtures/README.md
+IAF_AI/dispatch/voice_out/fixtures/*
+!IAF_AI/dispatch/voice_out/fixtures/.gitkeep
+!IAF_AI/dispatch/voice_out/fixtures/README.md
+
+# ── Python ─────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ── OS ─────────────────────────────────────────────────────────────────────
+.DS_Store

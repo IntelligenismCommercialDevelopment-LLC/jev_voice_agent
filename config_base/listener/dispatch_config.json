@@ -1,0 +1,70 @@
+{
+  "_note": "listener dispatch -- the ear. Three parallel blocks: agents.jev1 = JEV#1 'is the content complete yet'; stt = streaming STT connection parameters; knobs = the control loop's tuning. ★This directory has NO dispatch.py and must NEVER be loaded with chain.load_dispatch() -- it is not a conversational dispatch: no session, no tools, no generated tokens. The two clients live in IAF_AI/lib/ (jev_client.py / stt_client.py) and read this config themselves. ★There is no free_search block -- partly because no tool belongs here, and partly because sync_config.py will lay down explore_tools.py under tools/ the moment it sees one. ★There is no can_hold_mic / max_context -- those two fields have zero readers anywhere in the shell, so a newly written config simply does not inherit them. ★Mirror rule: this file and IAF_AI/dispatch/listener/dispatch_config.json must be changed together, and the downward direction only via `python sync_config.py` (it translates the relative paths in context_files). Never hand-edit the copy inside the engine. ★No keys here: this file goes through the mirror rule, so a key would travel with it -- api_key is fetched by the clients from providers.* in IAF_AI/config.json.",
+  "display_name": "voice agent · ear (listener)",
+  "agent_id": "voice_agent_listener",
+  "agents": {
+    "jev1": {
+      "display_name": "JEV#1 -- is the content complete yet",
+      "role": "judge",
+      "_api_note": "★JEV is not a chat model. It speaks the Decisions API, not /chat/completions -- hitting the chat endpoint returns 400, and it does not appear in /api/v1/models either. That is why lib/jev_client.py cannot go through the ordinary LLM client. Request body = {state, model, questions}; response = {answers:{<key>:{type:'noul', noul:0..1}}, usage}. ★A noul answer has NO separate confidence field (that belongs to choice/score answers) -- the noul value IS the calibrated 0..1 probability, and meaningful = noul > meaningful_threshold.",
+      "provider": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "endpoint": "https://openrouter.ai/api/alpha/decisions",
+      "_endpoint_note": "Both endpoints claim to work: /api/alpha/decisions (OpenRouter native -- the only one that actually answered in third-party benchmarks) and /api/v1/systemone (TypeSafe-compatible shape). Pinned to the former because it has measurements behind it. Switching endpoints is editing this line, not the code.",
+      "timeout_s": 5.0,
+      "_no_gen_params_note": "★Deliberately no temperature / max_tokens / reasoning / provider_routing -- JEV generates no tokens and does not accept those. Copying the speaker block here would send fields it does not recognise.",
+      "context_files": [
+        "prompt_base/listener/question.md"
+      ]
+    }
+  },
+  "stt": {
+    "_note": "Streaming STT connection parameters. They live here rather than hard-coded in lib/stt_client.py so that changing a VAD threshold needs no code change, and so that they are covered by the mirror rule. DEFAULT_STT in lib/stt_client.py is the fallback for the same set of values; the two must agree.",
+    "model": "grok-voice-transcribe-2.0",
+    "encoding": "pcm",
+    "sample_rate": 16000,
+    "interim_results": true,
+    "endpointing": 400,
+    "_endpointing_note": "400 -> 300 is the first knob to reach for when cutting latency. Untried so far.",
+    "language": "en",
+    "_language_note": "★★Read this before trusting the defaults. All the calibration in this repo (speech-rate gate, JEV threshold, silence baselines) was measured with language=zh, where the measured behaviour was: Chinese with embedded English proper nouns transcribes very well ('Google Cloud' verbatim), but PURE ENGLISH degrades noticeably -- homophone substitutions and stuttered repetitions leak into the final. The default here is 'en' because this release is English, which means the degraded path is the default path. Expect the hallucination gate and the JEV threshold to need re-scanning on your own English corpus; neither number has been validated under language=en.",
+    "smart_turn": 0.55,
+    "smart_turn_timeout": 1800,
+    "vad_threshold": 0.08,
+    "filler_words": false,
+    "_filler_words_note": "★Measured: the provider's own filler stripping does not catch everything (fillers still reach the final) -- so the JEV questions have to be able to digest fillers on their own, and they are written that way.",
+    "keyterm": [
+      "LanceDB",
+      "Google Cloud",
+      "Gemini",
+      "Grok",
+      "OpenAI",
+      "embedding",
+      "Kubernetes",
+      "Postgres",
+      "Redis"
+    ],
+    "_keyterm_note": "★Not an optional nicety: measured, proper nouns are wrong on the first pass ('Lens', only later corrected to 'LanceDB', and split into two words on the way). Cap is 100 terms. When assembled into the URL these become REPEATED same-name parameters, not a comma-joined string. ★Trade-off worth knowing: biasing the model toward these terms is also the seed of the hallucination described in lib/stt_client.py -- on a short burst of noise the language prior can reconstruct a whole plausible sentence containing one of them. Put your own domain terms here, and keep the list short.",
+    "_privacy_note": "★These terms describe your domain and they travel to the STT provider on every connection. Treat the list as public."
+  },
+  "knobs": {
+    "_note": "The control loop's knobs plus one free pre-gate. ★No count is stated here: it went stale twice. ★These are knobs, not constants, and tick_interval_s is directly proportional to cost (1 Hz while talking continuously is roughly $0.5/hour as an upper bound), so turn it with the bill in view.",
+    "tick_interval_s": 1.0,
+    "llm_min_silence_s": 1.0,
+    "_llm_min_silence_note": "★★The SECOND condition for firing the LLM (default 1 second): the person must have stopped speaking for at least this long before the LLM starts processing what is in the reply list. ★Why it is needed: JEV#1 only answers 'is there enough content to answer', it does NOT answer 'have they finished'. Without this condition, a complete thought formed mid-sentence ('you remember LanceDB, right' -- still to be followed by '…what happened with that in the end') gets answered over the top of the speaker, and since barge-in was removed the machine will say the whole thing. ★This does NOT hold back submission: JEV#1 still passes, the cut still enters the reply list (its job is done); only the LLM fires later. Keeping the two separate is what stops the pool losing water. The number of times it held is recorded in stats['llm_held']. ★Unit = silence.silence_seconds() (seconds, on the audio timeline carried by the STT events). It is the SAME QUANTITY as the mouth side's speak_min_silence_s, exposed as two knobs: this one governs 'when to start thinking', that one governs 'when to start speaking'. ★The waiting is done by having the ticker glance once per tick and wake the consumer; the consumer never sleeps on its own -- a second real clock would be a second clock to keep aligned, and since silence is tested with a fake clock, a misalignment would show up as a false green. ★Known cost (measured): `now - stop_wall` measures 'how far the audio we have transcription for extends', so while a person is still talking it already climbs to 1606ms (p50) / 2185ms (max) -- which means a 1.0s threshold is exceeded by 36 of the 38 mid-sentence gaps in the measured corpus. The 1.0 default was chosen with that number in hand. Assertions 17c/17d/21m guard the mechanism.",
+    "meaningless_strikes": 5,
+    "_meaningless_strikes_note": "★Three-strikes threshold (5). **This number and the removal of the speech_final fallback are one and the same piece of work**: before the removal it could never fire (measured across 18 real turns, strikes peaked at 2, because endpointing:400 triggers a _submit() and a reset every 400ms); after the removal it is the ONLY cleanup path. ★5 ticks is roughly 5 seconds = the contamination window: if someone starts a new topic at second 4, the old fragment is still sitting in U and JEV is judging the two spliced together. Lower it and U is cleaner, but you more easily throw away the words of someone who talks slowly.",
+    "strike_reset_growth_chars": 1,
+    "_strike_reset_growth_note": "★The RESET BASELINE for the three-strikes counter, deliberately a field rather than hard-coded in the script. Meaning: how many characters U must have grown by, in total since the last reset, to count as 'they are still talking' and zero the counter. 1 = any single extra character resets it (this is the behaviour that used to be hard-coded, so turning it into a field changed nothing on the day). ★The unit is CUMULATIVE, not per-tick (the baseline only moves on a reset): for someone producing one character per second, a setting of 3 resets on the third tick; under a per-tick reading, 'slow trickle' would never reach the threshold and strikes would climb until it wiped out their words. ★Raise it to mean 'fillers and stutters do not count as still talking', at the cost of striking out slow speakers more easily.",
+    "meaningful_threshold": 0.65,
+    "_meaningful_threshold_note": "★Scanned on a 23-line labelled corpus with jev_bench.py: 0.50-0.80 was a single flat plateau, hit rate constant at 21/23 = 0.913 with zero false positives; it fell away on both sides. 0.65 = the middle of that plateau. ★★Then the premise changed and this number needs re-examining. The original reasoning was 'bias high, because a false negative (missing a complete utterance) is nearly free -- the speech_final bypass will submit it anyway'. **That bypass has since been removed**, which INVERTS the relative cost of the two error types: a false negative now means three-strikes genuinely discards what the person said, while a false positive only costs one extra LLM call. Measured consequence: at 0.65, two of the twelve label=true lines score below it ('Hello?' at 0.19, 'Is anybody here something?' at 0.26) -- short greetings of that kind are now really dropped. ★The decision taken was that short-greeting exemptions belong in the JEV question text (the prompt), NOT as an extra branch in the script; this field stays available for later tuning (0.15 was the highest point with fn=0 in the scan, at a cost of fp going 0 -> 3). ★Must not be null -- it is a number that gets compared. ★★The corpus and the scan report are NOT shipped with this repository (they were real recordings of one person's speech). Rescan on your own corpus before trusting 0.65, especially under language=en.",
+    "jev_trim_units": 1,
+    "_jev_trim_note": "Trim this many units off the tail of the active partial before feeding JEV (1-2 words). ★The trim is for JUDGEMENT ONLY -- submission always submits the whole of U. Submitting the trimmed version would silently eat a word or two from every cut, and read perfectly naturally while doing it. Rule: split on whitespace if there is any, otherwise by character; trimming everything away returns the empty string (reply_list._trim_tail). Only 1 has been measured.",
+    "max_inflight": 2,
+    "_max_inflight_note": "Cap on JEV requests in flight at once. ★'A new tick cancels the previous tick' was changed to DISCARD THE ANSWER rather than CANCEL THE REQUEST: measured, cancellation poisons the connection pool (352-421ms when clean, 1119-1425ms immediately after a cancel), which self-sustains into an avalanche at 1 Hz; and since JEV output is free and the input was already sent, cancelling saves nothing. Hitting the cap skips the tick instead -- if you are at the cap the endpoint has genuinely degraded, and piling on more in-flight requests only makes it slower.",
+    "silence_ticks_to_speak": 2,
+    "_silence_ticks_note": "The test is > 1, not > 0, giving a lower bound of 1 second.",
+    "min_end_of_turn_confidence": null,
+    "_min_conf_note": "★Off (null) for now. end_of_turn_confidence is orthogonal to JEV#1 (a bare acknowledgement scores 0.98): it tracks 'has the person stopped' rather than 'is there enough to answer', so it cannot replace JEV#1 -- but it is free, and could serve as a pre-gate that saves a call. Setting a threshold needs paired conf-vs-completeness data, and the early recordings did not store conf (it was added to the event log later, so it only applies to runs from then on). Collect enough of your own and then tune."
+  }
+}

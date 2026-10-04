@@ -1,0 +1,61 @@
+{
+  "_": "RUNTIME CONTROL parameters for voice_cli.py and for memory compression. ★This file is NOT covered by the mirror rule and does NOT go through sync_config -- it is not a dispatch config (not one character of it reaches an LLM), it is this shell's own set of switches, which is why it lives at the shell root rather than under config_base/. Editing it needs no push-down.",
+
+  "silence": {
+    "_unit": "TICKS. Both numbers below are in EAR-SIDE TICKS, not seconds. With the listener's knobs.tick_interval_s = 1.0 one tick is one second, so 60 means 'nobody has spoken for 60 seconds'. ★Change tick_interval_s and the real duration of these two numbers changes with it.",
+
+    "sleep_after_ticks": 60,
+    "_sleep_after_ticks": "When silence_ticks reaches this number -> cut the STT connection and go idle, waiting for Enter to wake. While idle no audio is sent = nothing is billed (STT is billed by duration sent, and silence counts). Set <= 0 to never go idle (STT stays connected and bills by wall clock the whole time).",
+
+    "announce_every_ticks": 60,
+    "_announce_every_ticks": "While idle, print one line 'idle · silence_ticks=N' to the terminal every this many ticks. ★Why this exists: idling may last hours, and if the terminal prints nothing at all, 'asleep' and 'the process has hung' look exactly the same on screen. Set <= 0 to print the notice once on entering idle and then stay quiet."
+  },
+
+  "mic_gate": {
+    "_read_by": "load_mic_gate() in voice_cli.py. Half-duplex gate: mute the mic while the machine is speaking, so its own mouth does not reach its own ear -> YOU CAN USE SPEAKERS, NO HEADPHONES NEEDED.",
+    "_what_it_does_not_solve": "★It is not AEC. It only mutes the machine's own TTS -- it cannot block someone else talking or another device playing audio, and when a person and the machine speak at once the person's voice is NOT RECEIVED (rather than cancelled). Also: anything a person says while the machine is talking is simply dropped; that is the definition of half duplex (and the same direction as the removal of barge-in). Getting barge-in or full duplex back is what would require real AEC (the reference signal is already to hand: LocalPlayer.feed is holding exactly the PCM being fed to the sound card), and that is a different order of work.",
+
+    "enabled": true,
+    "_enabled": "Master switch. Turn it off and you are back to the earlier behaviour: HEADPHONES ARE MANDATORY (speakers self-oscillate, and with barge-in removed each loop is a full LLM call plus a full TTS synthesis -- real money, and it sounds like a normal conversation so it is not easy to notice while it happens). ★The manual confirmation before the mic opens is unaffected by this switch and must still be passed; only its wording changes, from 'have you got headphones on?' to 'have you checked the speaker setup?'.",
+
+    "hangover_ms": 300,
+    "_hangover_ms": "Keep muting for this long after settle() returns. ★settle() already waits for the sound card to finish playing out the bytes and adds latency_s on top -- it has accounted for the sound card's own tail. This value covers what it cannot account for: ROOM REVERBERATION. ★★300 is a STARTING VALUE, NOT A MEASURED ONE: reverberation can only be measured in situ (run once on speakers and see whether anything leaks back), then write the measurement in here.",
+
+    "feed_silence": true,
+    "_feed_silence": "While muted, send STT AN EQUAL LENGTH OF ZERO FRAMES rather than sending nothing. Sending nothing freezes the server-side audio timeline -> endpointing/VAD does not fire during the mute -> the half-sentence that was hanging when the mute began never closes, and after the mute the two stretches of audio are treated by the server as one continuous utterance. Both approaches COST EXACTLY THE SAME (an active connection is billed by duration sent, and silence counts), so sending zeros is the default. Set false to save the STT cost of the TTS fraction, at the price of undefined server-side semantics."
+  },
+
+  "hallucination_gate": {
+    "_read_by": "load_hallucination_gate() in voice_cli.py; the gate itself is VoiceWiring._hallucinated, and the criterion is the pure function implausible() in IAF_AI/lib/stt_client.py.",
+    "_what_it_blocks": "★It blocks on SPEECH RATE: a transcript's unit count divided by the duration of the audio window it carries. Above the ceiling, it is PHYSICALLY IMPOSSIBLE FOR A HUMAN TO HAVE SAID IT. Measured over all 60 non-empty finals in the original corpus: p50 2.78 · p90 3.83 · p95 4.01 · fastest real human 4.31 units/second. In that same batch one hallucination sat at 11.31 units/second (a 0.62s audio window containing a complete seven-unit sentence, conf=0.983, three seconds after the mic opened, with the machine not yet having made a sound and nobody having spoken). The space between those two numbers is empty, and the threshold sits in that empty space.",
+    "_what_it_does_not_solve": "★It does not look at content, so it cannot block A HALLUCINATION AT A NORMAL SPEECH RATE (someone genuinely talking nearby, or another device playing audio). It is also not AEC -- that is mic_gate's job. ★The source of the hallucination is keyterm biasing plus a low vad_threshold (config_base/listener/dispatch_config.json); this gate is a downstream backstop, not a cure.",
+    "enabled": true,
+    "_enabled": "Master switch. Turn it off and you are back to the earlier behaviour: a whole sentence fabricated on a very short burst of audio enters U verbatim -> drives one LLM call and one TTS synthesis -> and is written permanently into pool/threads/{peer}.md. This really happened, twice in one day, and both times cost real money.",
+    "max_cps": 8.0,
+    "_max_cps": "Units-per-second ceiling. 8.0 = 1.9x the fastest real human measured (4.31) and 0.71x that hallucination (11.31). ★Unit counting: one CJK character counts as 1, and one run of consecutive letters counts as 1 ('LanceDB' is one unit, not seven) -- count by len(text) instead and mixed-script text overstates the Latin part several times over, so the threshold drifts with the LANGUAGE: the same number is loose for one and tight for another, and nothing reports it. ★★The calibration above was measured on Chinese speech. Under language=en the unit is effectively 'words per second', which the same rule handles correctly, but 8.0 itself has NOT been revalidated on English -- scan your own corpus before trusting it.",
+    "min_units": 4,
+    "_min_units": "Shorter than this many units and no judgement is made. A one- or two-unit acknowledgement ('mm', 'right', 'code?') has a short audio window by nature, and dividing by a small denominator produces a very large ratio. The shortest real human final measured was 2 units / 1.58s; that hallucination was 7 units, so it was inside the judging range.",
+    "_if_it_kills_something_real": "★This gate WILL THROW AWAY WORDS A PERSON SAID, so it must leave a trace: every blocked line prints in yellow on the spot, is relisted in the closing report, and goes into the recording (the cps and dropped keys in fixtures/voice_*.jsonl). If it really does misfire, raise max_cps or set enabled to false -- no code change needed. Assertion 31d guards zero-false-kill against the whole corpus.",
+    "_upstream_fix_pending": "The real fix is keyterm (nine entries) and vad_threshold=0.08. keyterm biases the model toward those words, which on a noisy fragment is exactly the seed of the hallucination; changing them means editing config_base/listener/ and pushing it down, and it will reduce proper-noun accuracy -- so first see how many this gate actually catches in your setting."
+  },
+
+  "memory": {
+    "_read_by": "load_config() in IAF_AI/assemble_pool.py. Everything is in tokens (est_tokens estimates 0.75 tok per CJK character and 0.25 per other character, deliberately an overestimate -> better to compress early).",
+    "_why_not_per_turn": "reply_list._persist is two independent ifs (the person spoke -> write one 'in' block; the machine made a sound -> write one 'out' block), so one turn is either 1 or 2 blocks, never fixed. In a real thread file, 79 blocks were 41 in / 38 out, with three consecutive 'in' blocks in one stretch. Counting tokens is both stable and exactly the quantity actually cared about (context budget / cost / latency).",
+
+    "keep_recent_tokens": 2000,
+    "_keep_recent_tokens": "This many tokens of the most recent verbatim conversation DO NOT PARTICIPATE IN COMPRESSION, and are also exactly the part injected into the LLM each turn. Measured at ~45 tok/block -> 2000 is ~44 blocks ~ 25 turns. Raise it to remember longer at a higher per-turn input cost; lower it for the opposite.",
+
+    "min_keep_blocks": 6,
+    "_min_keep_blocks": "Floor on the number of blocks in the retention window. ★Not decorative: one 5000-token monologue makes a pure token budget compute 0 blocks -- not even the sentence just spoken gets injected, which in the field presents as 'it forgot what I just said'.",
+
+    "thread_trigger_tokens": 8000,
+    "_thread_trigger_tokens": "When one peer's thread file exceeds this length -> trigger compression (hand the blocks outside the retention window to thread_compressor to be summarised). ★The old value of 50000 effectively disabled compression in a voice setting (at 78 tok/turn it would take ~640 turns). 8000 is roughly one compression per 100 turns, with ~6k tok of input each time (the compressor's max_tokens is 8000).",
+
+    "thread_target_tokens": 5000,
+    "_thread_target_tokens": "Target ceiling for the compressed output (a soft constraint, steered by the length requirement in compress_thread_skill.md; not a hard truncation).",
+
+    "pool_trigger_tokens": 70000,
+    "_pool_trigger_tokens": "★This layer CANNOT CURRENTLY FIRE, and changing this number does nothing. pool_tok = semantic + a bounded tail, and semantic is only ever written by pool compression itself -> it stays permanently empty. Bringing pool/semantic.md (the cross-conversation integrated semantic layer) to life requires changing the trigger formula in compression_plan() first, which is an unmade design decision."
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "_note": "pool_compressor dispatch -- blended information-pool compression. No tools, a pure text transform: chain.py stages [the old integrated-semantic-layer narrative + each counterpart's newly added tail] into workspace/current/compress_input.md (injected via context_files); this dispatch emits a de-personalised narrative cross-linked by topic/entity, and chain takes text_response and overwrites pool/semantic.md. ★The point: conversations with multiple counterparts are compressed together, the conversational structure may be broken up (de-personalised narrative), and connectivity lives in this layer (fragments from different conversations converge under one topic/entity). A mid-tier model (de-personalising and cross-linking takes a little more writing ability). ★Keep it non-streaming, same as thread_compressor. ★Three things that must not be touched (same reasons as the speaker): (1) **No free_search block** -- dispatch.py decides its mode with `free_search and (free_search_path or write_allow)`, and leaving it in puts this dispatch into FREE SEARCH MODE with exit_tools={write_file}; a compressor is a pure text transform and should load no tools at all. (2) **No *_tools.py under tools/** -- STANDARD MODE glob-loads them. (3) **max_tokens must be written explicitly** -- omit it and you inherit the provider default of 4096, which truncates the compressed output; the symptom of that truncation is 'the summary just stops mid-sentence', with no error.",
+  "display_name": "voice agent · pool blended compressor (pool_compressor)",
+  "agent_id": "voice_agent_pool_compressor",
+  "agents": {
+    "pool_compressor": {
+      "display_name": "Pool blended compression (multi-counterpart conversation -> de-personalised integrated narrative)",
+      "role": "core",
+      "provider": "deepseek",
+      "model": "deepseek-flash",
+      "_provider_routing_note": "Same as thread_compressor: 'deepseek' is a marker and is not sent on a direct connection.",
+      "provider_routing": "deepseek",
+      "temperature": 0.2,
+      "max_tokens": 12000,
+      "reasoning": {
+        "_note": "DeepSeek's native thinking format; see the same field in thread_compressor.",
+        "effort": "high"
+      },
+      "context_files": [
+        "prompt_base/pool_compressor/compress_pool_skill.md",
+        "workspace/current/compress_input.md"
+      ]
+    }
+  }
+}

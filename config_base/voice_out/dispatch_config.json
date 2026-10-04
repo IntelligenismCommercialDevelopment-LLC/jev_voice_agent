@@ -1,0 +1,58 @@
+{
+  "_note": "The mouth (voice_out). ★This is the AUTHORITATIVE copy under config_base -- edit configuration here, then run `python sync_config.py` to push it down to IAF_AI/dispatch/voice_out/. Editing the copy under IAF_AI directly gets overwritten by the next sync.",
+  "display_name": "voice agent · mouth (voice_out)",
+  "agent_id": "voice_agent_voice_out",
+  "agents": {
+    "jev2": {
+      "display_name": "JEV#2 -- has this person finished their turn",
+      "role": "judge",
+      "_api_note": "Same as listener's jev1: ★JEV is not a chat model, it speaks the Decisions API (POST /api/alpha/decisions); hitting /chat/completions returns 400. In the response, answers.<key>.noul IS the calibrated 0..1 probability -- there is no separate confidence field. lib/jev_client.py is reused with zero changes: JevClient's agent_name / question_key / threshold are all parameters.",
+      "provider": "openrouter",
+      "model": "typesafe/jev-1.13",
+      "endpoint": "https://openrouter.ai/api/alpha/decisions",
+      "timeout_s": 5.0,
+      "question_key": "turn_over",
+      "_question_key_note": "★NOT jev1's 'complete'. The module default of jev_client.QUESTION_KEY is 'complete', so question_key must be passed explicitly when constructing JevClient -- otherwise the key is missing from the response and it raises (it does not silently answer false: if verdict_from_answer cannot read it, it reports).",
+      "context_files": [
+        "prompt_base/voice_out/question.md"
+      ]
+    }
+  },
+  "tts": {
+    "_note": "Streaming TTS connection parameters. They live here rather than hard-coded in lib/tts_client.py so that changing voice or speed needs no code change, and so they are covered by the mirror rule. DEFAULT_TTS in lib/tts_client.py is the fallback for the same set of values; the two must agree.",
+    "endpoint": "wss://api.x.ai/v1/tts",
+    "language": "en",
+    "voice": "eve",
+    "codec": "pcm",
+    "sample_rate": 24000,
+    "_sample_rate_note": "★24000, not the 16000 on the STT side. Two different sample rates, one in and one out: the local playback stream must be opened at 24k. Open it at 16k and speech comes out slow and deep -- with no error.",
+    "speed": 1.0,
+    "optimize_streaming_latency": 1,
+    "_latency_note": "0 = finished voice-over quality / 1 = live conversation (default) / 2 = race for first audio, trading quality for latency. When squeezing tts_ttfa_ms, turn this first, then consider anything else.",
+    "text_normalization": false,
+    "_text_normalization_note": "How numbers and amounts are read out. Off for now -- enabling it adds a layer of server-side processing whose effect on first-packet latency has not been measured.",
+    "jitter_buffer_ms": 250,
+    "_jitter_note": "80-150ms is the usual recommendation. ★This buffer IS the stretch of 'audio already received but not yet spoken' -- a text.clear must clear it too (it is the local half of a two-level clear). Clear only the server side and it will go on speaking."
+  },
+  "knobs": {
+    "_note": "The mouth's knobs. ★tick_interval_s here is the rate at which the GATE IS CHECKED (free) and is already decoupled from the cost of JEV#2 -- the part that costs money is rate-limited by jev2_min_interval_s. This tick and the ear's tick are two separate bills.",
+    "tick_interval_s": 0.25,
+    "_tick_note": "★★Lowered from 1.0 to 0.25. The only reason to lower it is OPENING LATENCY: however accurate the silence criterion is, a 1 Hz polling rate adds its 0-1 second quantisation residue straight back onto the decision point. Lowering it does NOT cost more, because asking JEV#2 is rate-limited separately. ★This tick still must NOT call SilenceCounter.tick(): the file's only writer is the ear's _tick_loop -- a second writer makes 'read 3 -> reset -> write back 4' swallow the reset, with no error. The mouth only reads silence_seconds() (the criterion) and value() (for the record).",
+    "jev2_min_interval_s": 1.0,
+    "_jev2_interval_note": "★Rate limit: the silence counter must have grown by this much since the last question before JEV#2 may be asked again. 1.0 = exactly the same bill as the old 1 Hz. ★The unit is SILENCE SECONDS, not wall clock -- the only time reference in this loop is silence_seconds(), and introducing a second clock means two clocks to keep aligned, while the offline harness drives a fake version of the first; a mismatch would show up as a false green. ★Drop tick_interval_s to 0.25 without this and JEV#2's bill quadruples, with no error (just a fatter invoice). Assertion 21c2 guards it.",
+    "speak_min_silence_s": 1.0,
+    "_min_silence_note": "★Lower bound: if the person has genuinely been quiet for less than this, hold immediately and do not ask JEV#2 (a free way to block the most common case). ★★Set to 1.0, the same default as the ear's llm_min_silence_s (one governs 'when to start thinking', the other 'when to start speaking'). ★★**This is a knowingly costly choice, and the cost is written here so nobody mistakes it for a slip**: `now - stop_wall` does not measure 'how long the person has been quiet', it measures **how far the audio we have transcription for extends**. STT emits a partial roughly every 958ms describing audio from roughly 677ms earlier, so **while the person is still talking this reading already climbs to 1606ms (p50) / 2185ms (max)**. Scan over the real corpus (4 timestamped recordings / 7 genuine stops / 38 mid-sentence gaps; format: false breaches mid-sentence <-> genuine stop-to-gate-open p50): old tick-count unit 4/38 <-> 2100ms; **1.0s -> 36/38 <-> 1100ms (current value)**; 1.75s -> 11/38 <-> 1850ms; 2.0s -> 5/38 <-> 2100ms (as safe as the old unit); 2.5s -> 2/38 <-> 2600ms. So 1.0s means the gate **often starts asking JEV#2 while the person is mid-sentence**: (1) it costs extra JEV#2 calls, (2) the entire judgement then rests on turn_over_threshold, and **that number has never been calibrated**, (3) with barge-in removed, every false positive is the machine talking over the person for a whole utterance. ★**To tighten it, go to 2.0** (the equal-safety point); do not reach for a different knob. To fix it properly, calibrate with jev2_bench.py first. ★The information-theoretic floor for inferring 'they stopped' from event gaps is 677+960 ~= 1.6s, and the old tick-count unit bottomed out at exactly 1600ms -- **it was already sitting on that floor**. Switching to seconds bought determinism instead of luck, and decoupled the cost rate from the latency rate; it did not buy latency.",
+    "max_hold_s": 6.0,
+    "_max_hold_note": "★Upper bound: once the person has genuinely been quiet this long, pass unconditionally without asking JEV#2. Without it, a JEV#2 that keeps answering false waits forever -- the symptom being 'the machine listened to you for half a minute and then said nothing', with no error. ★★Changed from max_hold_ticks:6 to seconds. The unit change is not fastidiousness: the moment the tick dropped to 0.25, that '6 ticks' would have silently become 1.5 seconds. Every knob with _ticks in its name drifts with the tick length, and keeps running, and still does not complain.",
+    "turn_over_threshold": 0.6,
+    "_threshold_note": "★★This number IS A GUESS. It has never been scanned on a real corpus, which makes it fundamentally different from JEV#1's 0.65 (the middle of a plateau found across a labelled corpus, with zero false positives). It cannot be settled until jev2_bench.py has a corpus. ★The two error costs are asymmetric here, and in the opposite direction to JEV#1: a false positive (speaking before they finished) really does interrupt someone, which is bad; a false negative (waiting after they finished) costs one more tick and max_hold_s catches it. So when you do calibrate, bias high.",
+    "max_inflight": 2,
+    "_max_inflight_note": "As on the ear side. ★A late verdict is always discarded rather than cancelled -- never task.cancel(). Measured, cancellation poisons the httpx connection pool (352-421ms when clean, 1119-1425ms immediately after a cancel), which self-sustains into an avalanche at 1 Hz; and since the JEV input was already sent and the output is free, cancelling saves nothing.",
+    "playback_lead_s": 6.0,
+    "_lead_note": "★Prefetch depth: the sink returns once this many seconds are still left in the queue, rather than waiting for the current chunk to finish playing. Without prefetch, the one-utterance-per-chunk design inserts 0.5-1.0s of silence between chunks -- measured at 18% of total duration. Generation measures 1.0-2.2s (1.0-1.9s during calibration, up to 2195ms in live acceptance); at 2.5s only ~0.3s of margin was left and a real run hit a dropout, hence 3.5s; then a live run produced a **final chunk that spiked to 6414ms** (the other chunks in that same turn were 1.7-3.6s) and hit another dropout, hence 6.0s. ★Generation time has no upper bound, so this is a probability, not a guarantee: LocalPlayer.gaps is the number that watches it -- see gaps>0 in a real run and raise this. ★Too small and you get stuttering (watch LocalPlayer.underruns, which maps directly to dropouts the ear can hear); too large merely discards a little more already-generated audio when interrupted, which is harmless.",
+    "extra_latency_ms": 0,
+    "_extra_latency_note": "★For Bluetooth headsets. Closing out a turn means also waiting for the sound card's own tail (the stream.latency PortAudio reports) before the turn counts as really spoken; Bluetooth frequently under-reports it, and this compensates.",
+    "tts_ttfa_ms_measured": 603,
+    "_ttfa_note": "★Measured p50 (5 samples, min 559 / max 834; the 12 calibration samples fell in 555-897). The usual budget is 100-300ms + RTT, so we are at the high end, the same order as the 678ms on the STT side. optimize_streaming_latency 1->2 is the first knob for squeezing it; untried."
+  }
+}

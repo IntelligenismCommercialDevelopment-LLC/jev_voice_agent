@@ -1,0 +1,1 @@
+you can copy the document to create new agent-cooperaiton mode(dispatch) immediately.
